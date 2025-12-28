@@ -1,0 +1,148 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  --canvas: #f3efe6;
+  --card: #fff8f0;
+  --ink: #1f2a2e;
+  --muted: #5e6b72;
+  --accent: #f36f5a;
+  --accent-2: #1f8a70;
+  --accent-3: #e0b562;
+  --outline: #d8cec0;
+  --shadow: 0 24px 60px -40px rgba(33, 22, 8, 0.6);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  background: radial-gradient(circle at 15% 10%, #fef1dc 0%, #f3efe6 55%)
+      no-repeat,
+    linear-gradient(135deg, #f3efe6 0%, #e9dfd1 100%);
+  font-family: var(--font-body);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at 85% 15%, rgba(31, 138, 112, 0.15), transparent 55%),
+    radial-gradient(circle at 20% 80%, rgba(243, 111, 90, 0.2), transparent 55%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+}
+
+.card {
+  background: var(--card);
+  border-radius: 24px;
+  border: 1px solid var(--outline);
+  box-shadow: var(--shadow);
+}
+
+.frost {
+  position: relative;
+  overflow: hidden;
+}
+
+.frost::after {
+  content: "";
+  position: absolute;
+  right: -25%;
+  bottom: -35%;
+  width: 240px;
+  height: 240px;
+  background: radial-gradient(circle, rgba(243, 111, 90, 0.16), transparent 70%);
+  pointer-events: none;
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--accent-2);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: line-draw 1.2s ease forwards;
+}
+
+.chart-line.weight {
+  stroke: var(--accent);
+}
+
+.chart-dot {
+  fill: var(--accent-3);
+  transform-origin: center;
+  animation: pop 0.6s ease forwards;
+}
+
+.chart-grid {
+  stroke: rgba(31, 42, 46, 0.12);
+  stroke-width: 1;
+}
+
+.chart-axis {
+  stroke: rgba(31, 42, 46, 0.25);
+  stroke-width: 1.5;
+}
+
+.chart-label {
+  fill: var(--muted);
+  font-size: 12px;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes line-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.2);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .card {
+    box-shadow: none;
+  }
+}
