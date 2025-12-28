@@ -3,13 +3,13 @@ import { Gowun_Batang, Gowun_Dodum } from "next/font/google";
 import "./globals.css";
 
 const display = Gowun_Batang({
-  subsets: ["latin", "korean"],
+  subsets: ["latin"],
   weight: ["400", "700"],
   variable: "--font-display"
 });
 
 const body = Gowun_Dodum({
-  subsets: ["latin", "korean"],
+  subsets: ["latin"],
   weight: ["400"],
   variable: "--font-body"
 });
