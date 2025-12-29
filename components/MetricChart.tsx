@@ -48,7 +48,14 @@ export default function MetricChart({
     }))
     .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
 
-  if (!points.length) {
+  const referencePoints = (referenceCurves ?? []).flatMap((curve) => curve.points);
+  const hasHighlight =
+    Boolean(highlightPoint) &&
+    Number.isFinite(highlightPoint?.x) &&
+    Number.isFinite(highlightPoint?.y);
+  const hasRenderableData = points.length > 0 || referencePoints.length > 0 || hasHighlight;
+
+  if (!hasRenderableData) {
     return (
       <div
         className={`flex h-[200px] w-full items-center justify-center text-sm text-muted ${className ?? ""}`}
@@ -58,11 +65,11 @@ export default function MetricChart({
     );
   }
 
-  const referencePoints = (referenceCurves ?? []).flatMap((curve) => curve.points);
   const allX = [
     ...points.map((point) => point.x),
     ...referencePoints.map((point) => point.x),
-    highlightPoint?.x
+    highlightPoint?.x,
+    ...(events ?? []).map((event) => event.x)
   ].filter((value): value is number => Number.isFinite(value));
   const allY = [
     ...points.map((point) => point.y),
@@ -168,11 +175,13 @@ export default function MetricChart({
         className="chart-axis"
       />
 
-      <path
-        d={pathD}
-        className={`chart-line ${metric === "weight" ? "weight" : ""}`}
-        pathLength={1}
-      />
+      {points.length > 0 && (
+        <path
+          d={pathD}
+          className={`chart-line ${metric === "weight" ? "weight" : ""}`}
+          pathLength={1}
+        />
+      )}
 
       {points.map((point, index) => (
         <circle

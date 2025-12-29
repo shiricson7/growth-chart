@@ -343,6 +343,29 @@ export default function Home() {
       ? "36개월 미만"
       : "36개월 이상"
     : "";
+  const inputAgeMonths = ageInfo?.ageMonths;
+  const inputHeight = Number.parseFloat(form.height);
+  const inputWeight = Number.parseFloat(form.weight);
+  const previewHeightPoint =
+    Number.isFinite(inputHeight) && typeof inputAgeMonths === "number"
+      ? { x: inputAgeMonths, y: inputHeight }
+      : currentVisit
+      ? { x: currentVisit.ageMonths, y: currentVisit.height }
+      : undefined;
+  const previewWeightPoint =
+    Number.isFinite(inputWeight) && typeof inputAgeMonths === "number"
+      ? { x: inputAgeMonths, y: inputWeight }
+      : currentVisit
+      ? { x: currentVisit.ageMonths, y: currentVisit.weight }
+      : undefined;
+  const activeAgeMonths = currentVisit?.ageMonths ?? inputAgeMonths;
+  const ageMonthsValue =
+    typeof activeAgeMonths === "number" && Number.isFinite(activeAgeMonths)
+      ? activeAgeMonths
+      : null;
+  const hasAgeInfo = ageMonthsValue !== null;
+  const showUnder36 = ageMonthsValue !== null && ageMonthsValue < 36;
+  const showOver36 = ageMonthsValue !== null && ageMonthsValue >= 36;
   const chartAgeFormatter = (value: number) => formatAge(Math.round(value));
   const chartPulseClass = chartPulse ? "animate-[chart-reveal_0.8s_ease]" : "";
   const isMutating = isLoading || Boolean(deletingVisitId);
@@ -370,6 +393,9 @@ export default function Home() {
 
   const ageRange = useMemo(() => {
     const ages = visits.map((visit) => visit.ageMonths).filter(Number.isFinite);
+    if (typeof inputAgeMonths === "number" && Number.isFinite(inputAgeMonths)) {
+      ages.push(inputAgeMonths);
+    }
     if (!ages.length) {
       return null;
     }
@@ -380,7 +406,7 @@ export default function Home() {
     minAge = Math.max(0, minAge - pad);
     maxAge += pad;
     return { min: minAge, max: maxAge };
-  }, [visits]);
+  }, [visits, inputAgeMonths]);
 
   const heightCurves = useMemo<ReferenceCurve[]>(() => {
     if (!heightTable || !sexKey) {
@@ -1048,13 +1074,13 @@ export default function Home() {
 
         <section className="card frost animate-[rise_1.15s_ease] p-6 lg:col-span-7">
           <h2 className="text-xl font-semibold">성장 차트</h2>
-          {!currentVisit && (
+          {!hasAgeInfo && (
             <p className="mt-4 text-sm text-muted">
               입력값을 저장하면 나이에 맞는 차트가 표시됩니다.
             </p>
           )}
 
-          <div className={`mt-5 space-y-5 ${currentVisit && currentVisit.ageMonths < 36 ? "block" : "hidden"}`}>
+          <div className={`mt-5 space-y-5 ${showUnder36 ? "block" : "hidden"}`}>
             <div>
               <h3 className="text-lg font-semibold">36개월 미만 차트</h3>
               <p className="text-sm text-muted">짧은 간격 변화에 집중한 보기</p>
@@ -1080,9 +1106,7 @@ export default function Home() {
                     xValues={visitAges}
                     xRange={ageRange ?? undefined}
                     referenceCurves={heightCurves}
-                    highlightPoint={
-                      currentVisit ? { x: currentVisit.ageMonths, y: currentVisit.height } : undefined
-                    }
+                    highlightPoint={previewHeightPoint}
                     events={injectionEvents}
                     xLabelFormatter={chartAgeFormatter}
                     className="h-[220px] w-full sm:h-[240px]"
@@ -1109,6 +1133,7 @@ export default function Home() {
                     xValues={visitAges}
                     xRange={ageRange ?? undefined}
                     referenceCurves={weightCurves}
+                    highlightPoint={previewWeightPoint}
                     events={injectionEvents}
                     xLabelFormatter={chartAgeFormatter}
                     className="h-[220px] w-full sm:h-[240px]"
@@ -1118,7 +1143,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className={`mt-5 space-y-5 ${currentVisit && currentVisit.ageMonths >= 36 ? "block" : "hidden"}`}>
+          <div className={`mt-5 space-y-5 ${showOver36 ? "block" : "hidden"}`}>
             <div>
               <h3 className="text-lg font-semibold">36개월 이상 차트</h3>
               <p className="text-sm text-muted">장기 추세를 한눈에 볼 수 있는 보기</p>
@@ -1144,9 +1169,7 @@ export default function Home() {
                     xValues={visitAges}
                     xRange={ageRange ?? undefined}
                     referenceCurves={heightCurves}
-                    highlightPoint={
-                      currentVisit ? { x: currentVisit.ageMonths, y: currentVisit.height } : undefined
-                    }
+                    highlightPoint={previewHeightPoint}
                     events={injectionEvents}
                     xLabelFormatter={chartAgeFormatter}
                     className="h-[220px] w-full sm:h-[240px]"
@@ -1173,6 +1196,7 @@ export default function Home() {
                     xValues={visitAges}
                     xRange={ageRange ?? undefined}
                     referenceCurves={weightCurves}
+                    highlightPoint={previewWeightPoint}
                     events={injectionEvents}
                     xLabelFormatter={chartAgeFormatter}
                     className="h-[220px] w-full sm:h-[240px]"
@@ -1305,9 +1329,7 @@ export default function Home() {
                 xRange={ageRange ?? undefined}
                 referenceCurves={expandedChart.metric === "height" ? heightCurves : weightCurves}
                 highlightPoint={
-                  expandedChart.metric === "height" && currentVisit
-                    ? { x: currentVisit.ageMonths, y: currentVisit.height }
-                    : undefined
+                  expandedChart.metric === "height" ? previewHeightPoint : previewWeightPoint
                 }
                 events={injectionEvents}
                 xLabelFormatter={chartAgeFormatter}
