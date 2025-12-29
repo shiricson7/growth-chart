@@ -3,13 +3,13 @@ import { Nanum_Gothic } from "next/font/google";
 import "./globals.css";
 
 const display = Nanum_Gothic({
-  subsets: ["latin", "korean"],
+  subsets: ["latin"],
   weight: ["400", "700"],
   variable: "--font-display"
 });
 
 const body = Nanum_Gothic({
-  subsets: ["latin", "korean"],
+  subsets: ["latin"],
   weight: ["400", "700"],
   variable: "--font-body"
 });
