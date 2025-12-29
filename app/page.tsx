@@ -156,11 +156,18 @@ function toNumber(value: number | string | null) {
   return typeof value === "number" ? value : Number.parseFloat(value);
 }
 
+function getTodayInputValue() {
+  const now = new Date();
+  const offsetMs = now.getTimezoneOffset() * 60000;
+  return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
+}
+
 export default function Home() {
   const [form, setForm] = useState({
     name: "",
     residentId: "",
     chartNo: "",
+    visitDate: getTodayInputValue(),
     height: "",
     weight: ""
   });
@@ -213,10 +220,11 @@ export default function Home() {
     const name = form.name.trim();
     const residentRaw = form.residentId.trim();
     const chartNo = form.chartNo.trim();
+    const visitDate = form.visitDate;
     const height = Number.parseFloat(form.height);
     const weight = Number.parseFloat(form.weight);
 
-    if (!name || !residentRaw || Number.isNaN(height) || Number.isNaN(weight)) {
+    if (!name || !residentRaw || !visitDate || Number.isNaN(height) || Number.isNaN(weight)) {
       setStatus({ message: "모든 필수 항목을 입력해주세요.", type: "error" });
       return;
     }
@@ -335,7 +343,8 @@ export default function Home() {
           height_cm: height,
           weight_kg: weight,
           bmi,
-          age_months: parsed.ageMonths
+          age_months: parsed.ageMonths,
+          created_at: visitDate
         })
         .select("id, height_cm, weight_kg, bmi, age_months, created_at")
         .single();
@@ -400,7 +409,14 @@ export default function Home() {
   };
 
   const handleReset = () => {
-    setForm({ name: "", residentId: "", chartNo: "", height: "", weight: "" });
+    setForm({
+      name: "",
+      residentId: "",
+      chartNo: "",
+      visitDate: getTodayInputValue(),
+      height: "",
+      weight: ""
+    });
     setStatus(defaultStatus);
   };
 
@@ -456,6 +472,16 @@ export default function Home() {
                   onChange={(event) => setForm((prev) => ({ ...prev, chartNo: event.target.value }))}
                   className="mt-2 w-full rounded-xl border border-outline bg-white/80 px-3 py-2 text-base text-ink outline-none focus:border-accent2"
                   placeholder="CH-2025-001"
+                />
+              </label>
+              <label className="text-sm text-muted">
+                검사일
+                <input
+                  type="date"
+                  value={form.visitDate}
+                  onChange={(event) => setForm((prev) => ({ ...prev, visitDate: event.target.value }))}
+                  required
+                  className="mt-2 w-full rounded-xl border border-outline bg-white/80 px-3 py-2 text-base text-ink outline-none focus:border-accent2"
                 />
               </label>
               <label className="text-sm text-muted">

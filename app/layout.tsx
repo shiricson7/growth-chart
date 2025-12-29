@@ -1,16 +1,16 @@
 import type { Metadata } from "next";
-import { Gowun_Batang, Gowun_Dodum } from "next/font/google";
+import { Nanum_Gothic } from "next/font/google";
 import "./globals.css";
 
-const display = Gowun_Batang({
-  subsets: ["latin"],
+const display = Nanum_Gothic({
+  subsets: ["latin", "korean"],
   weight: ["400", "700"],
   variable: "--font-display"
 });
 
-const body = Gowun_Dodum({
-  subsets: ["latin"],
-  weight: ["400"],
+const body = Nanum_Gothic({
+  subsets: ["latin", "korean"],
+  weight: ["400", "700"],
   variable: "--font-body"
 });
 
