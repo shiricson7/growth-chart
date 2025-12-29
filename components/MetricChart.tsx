@@ -1,17 +1,52 @@
 import React from "react";
 
+export type ReferenceCurve = {
+  key: string;
+  points: { x: number; y: number }[];
+};
+
+export type ChartEvent = {
+  x: number;
+  label: string;
+  type: "growth" | "suppression";
+  offset?: number;
+};
+
 type MetricChartProps = {
   metric: "height" | "weight";
   values: number[];
   labels: string[];
+  xValues?: number[];
+  xRange?: { min: number; max: number };
+  referenceCurves?: ReferenceCurve[];
+  highlightPoint?: { x: number; y: number };
+  events?: ChartEvent[];
+  xLabelFormatter?: (value: number) => string;
 };
 
 const width = 600;
 const height = 240;
 const padding = { top: 18, right: 24, bottom: 36, left: 52 };
 
-export default function MetricChart({ metric, values, labels }: MetricChartProps) {
-  if (!values.length) {
+export default function MetricChart({
+  metric,
+  values,
+  labels,
+  xValues,
+  xRange,
+  referenceCurves,
+  highlightPoint,
+  events,
+  xLabelFormatter
+}: MetricChartProps) {
+  const points = values
+    .map((value, index) => ({
+      x: xValues ? xValues[index] : index,
+      y: value
+    }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+
+  if (!points.length) {
     return (
       <div className="flex h-[200px] items-center justify-center text-sm text-muted">
         기록이 없습니다.
@@ -19,22 +54,39 @@ export default function MetricChart({ metric, values, labels }: MetricChartProps
     );
   }
 
-  let min = Math.min(...values);
-  let max = Math.max(...values);
+  const referencePoints = (referenceCurves ?? []).flatMap((curve) => curve.points);
+  const allX = [
+    ...points.map((point) => point.x),
+    ...referencePoints.map((point) => point.x),
+    highlightPoint?.x
+  ].filter((value): value is number => Number.isFinite(value));
+  const allY = [
+    ...points.map((point) => point.y),
+    ...referencePoints.map((point) => point.y),
+    highlightPoint?.y
+  ].filter((value): value is number => Number.isFinite(value));
+
+  let xMin = xRange?.min ?? Math.min(...allX);
+  let xMax = xRange?.max ?? Math.max(...allX);
+  if (xMax === xMin) {
+    xMax = xMin + 1;
+  }
+
+  let min = Math.min(...allY);
+  let max = Math.max(...allY);
   let range = max - min;
   if (range === 0) {
     range = 1;
   }
-  const pad = range * 0.2;
+  const pad = range * 0.18;
   min -= pad;
   max += pad;
 
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
 
-  const xFor = (index: number) =>
-    padding.left +
-    (values.length === 1 ? plotWidth / 2 : (plotWidth * index) / (values.length - 1));
+  const xFor = (value: number) =>
+    padding.left + ((value - xMin) / (xMax - xMin)) * plotWidth;
   const yFor = (value: number) =>
     padding.top + plotHeight * (1 - (value - min) / (max - min));
 
@@ -43,9 +95,28 @@ export default function MetricChart({ metric, values, labels }: MetricChartProps
     return { value, y: yFor(value) };
   });
 
-  const pathD = values
-    .map((value, index) => `${index === 0 ? "M" : "L"} ${xFor(index)} ${yFor(value)}`)
+  const pathD = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${xFor(point.x)} ${yFor(point.y)}`)
     .join(" ");
+
+  const curvePaths = (referenceCurves ?? [])
+    .map((curve) => {
+      const filtered = curve.points.filter(
+        (point) => point.x >= xMin && point.x <= xMax && Number.isFinite(point.y)
+      );
+      if (!filtered.length) {
+        return null;
+      }
+      const d = filtered
+        .map(
+          (point, index) => `${index === 0 ? "M" : "L"} ${xFor(point.x)} ${yFor(point.y)}`
+        )
+        .join(" ");
+      return { key: curve.key, d };
+    })
+    .filter((curve): curve is { key: string; d: string } => Boolean(curve));
+
+  const axisY = height - padding.bottom;
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="성장 추적 차트">
@@ -69,11 +140,21 @@ export default function MetricChart({ metric, values, labels }: MetricChartProps
         </g>
       ))}
 
+      {curvePaths.map((curve) => {
+        const curveClass =
+          curve.key === "50th"
+            ? "chart-percentile major"
+            : curve.key === "3rd" || curve.key === "97th"
+            ? "chart-percentile mid"
+            : "chart-percentile";
+        return <path key={`curve-${curve.key}`} d={curve.d} className={curveClass} />;
+      })}
+
       <line
         x1={padding.left}
         x2={width - padding.right}
-        y1={height - padding.bottom}
-        y2={height - padding.bottom}
+        y1={axisY}
+        y2={axisY}
         className="chart-axis"
       />
 
@@ -83,34 +164,69 @@ export default function MetricChart({ metric, values, labels }: MetricChartProps
         pathLength={1}
       />
 
-      {values.map((value, index) => (
+      {points.map((point, index) => (
         <circle
           key={`${metric}-${index}`}
-          cx={xFor(index)}
-          cy={yFor(value)}
+          cx={xFor(point.x)}
+          cy={yFor(point.y)}
           r={4}
           className="chart-dot"
           style={{ animationDelay: `${index * 0.08}s` }}
         />
       ))}
 
-      {values.length >= 2 && (
+      {highlightPoint && (
+        <circle
+          cx={xFor(highlightPoint.x)}
+          cy={yFor(highlightPoint.y)}
+          r={5.2}
+          className="chart-current"
+        />
+      )}
+
+      {events?.map((event, index) => {
+        const arrowSize = 6;
+        const x = xFor(event.x) + (event.offset ?? 0);
+        const baseY = axisY - 6;
+        const points =
+          event.type === "growth"
+            ? `${x},${baseY - arrowSize} ${x - arrowSize},${baseY + arrowSize} ${
+                x + arrowSize
+              },${baseY + arrowSize}`
+            : `${x},${baseY + arrowSize} ${x - arrowSize},${baseY - arrowSize} ${
+                x + arrowSize
+              },${baseY - arrowSize}`;
+        const labelY = baseY - arrowSize - 6;
+        return (
+          <g
+            key={`event-${index}`}
+            className={event.type === "growth" ? "chart-event-growth" : "chart-event-suppression"}
+          >
+            <polygon points={points} className="chart-event" />
+            <text x={x} y={labelY} className="chart-event-label" textAnchor="middle">
+              {event.label}
+            </text>
+          </g>
+        );
+      })}
+
+      {(xLabelFormatter || labels.length >= 2) && (
         <>
           <text
-            x={xFor(0)}
+            x={padding.left}
             y={height - 10}
             className="chart-label"
             textAnchor="start"
           >
-            {labels[0]}
+            {xLabelFormatter ? xLabelFormatter(xMin) : labels[0]}
           </text>
           <text
-            x={xFor(values.length - 1)}
+            x={width - padding.right}
             y={height - 10}
             className="chart-label"
             textAnchor="end"
           >
-            {labels[values.length - 1]}
+            {xLabelFormatter ? xLabelFormatter(xMax) : labels[labels.length - 1]}
           </text>
         </>
       )}

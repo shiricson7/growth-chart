@@ -15,6 +15,8 @@ create table if not exists visits (
   weight_kg numeric not null,
   bmi numeric not null,
   age_months integer not null,
+  growth_injection boolean not null default false,
+  suppression_injection boolean not null default false,
   created_at timestamptz not null default now()
 );
 

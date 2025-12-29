@@ -87,6 +87,45 @@ h3 {
   animation: pop 0.6s ease forwards;
 }
 
+.chart-percentile {
+  fill: none;
+  stroke: rgba(31, 42, 46, 0.18);
+  stroke-width: 1;
+}
+
+.chart-percentile.mid {
+  stroke: rgba(31, 42, 46, 0.32);
+  stroke-width: 1.4;
+}
+
+.chart-percentile.major {
+  stroke: rgba(31, 138, 112, 0.6);
+  stroke-width: 2;
+}
+
+.chart-current {
+  fill: #e34b4b;
+  stroke: #ffffff;
+  stroke-width: 1.4;
+}
+
+.chart-event {
+  fill: currentColor;
+}
+
+.chart-event-label {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.chart-event-growth {
+  color: var(--accent-2);
+}
+
+.chart-event-suppression {
+  color: var(--accent);
+}
+
 .chart-grid {
   stroke: rgba(31, 42, 46, 0.12);
   stroke-width: 1;

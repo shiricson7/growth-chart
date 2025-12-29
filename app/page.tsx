@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import MetricChart from "../components/MetricChart";
+import { useEffect, useMemo, useState } from "react";
+import MetricChart, { ChartEvent, ReferenceCurve } from "../components/MetricChart";
 import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
 
 type StatusType = "info" | "error" | "warn" | "success";
@@ -25,11 +25,24 @@ type Visit = {
   weight: number;
   bmi: number;
   ageMonths: number;
+  growthInjection: boolean;
+  suppressionInjection: boolean;
 };
 
 type AgeInfo = {
   birth: Date;
   ageMonths: number;
+};
+
+type GrowthCurve = {
+  ages: number[];
+  percentiles: Record<string, number[]>;
+};
+
+type GrowthTable = {
+  metric: "height" | "weight";
+  percentiles: string[];
+  bySex: Record<string, GrowthCurve>;
 };
 
 const centuryMap: Record<string, number> = {
@@ -59,7 +72,60 @@ function normalizeResidentId(value: string) {
   return value.replace(/\D/g, "");
 }
 
-function parseResidentId(value: string): AgeInfo | null {
+function parseDateInput(value: string) {
+  if (!value) {
+    return null;
+  }
+  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+  if (!year || !month || !day) {
+    return null;
+  }
+  return new Date(year, month - 1, day);
+}
+
+function getAgeMonths(birth: Date, onDate: Date) {
+  let months =
+    (onDate.getFullYear() - birth.getFullYear()) * 12 +
+    (onDate.getMonth() - birth.getMonth());
+  if (onDate.getDate() < birth.getDate()) {
+    months -= 1;
+  }
+  return months;
+}
+
+function getSexKey(value: string) {
+  const digits = normalizeResidentId(value);
+  if (digits.length < 7) {
+    return null;
+  }
+  const genderCode = digits[6];
+  if (["1", "3", "5", "7"].includes(genderCode)) {
+    return "1";
+  }
+  if (["2", "4", "6", "8"].includes(genderCode)) {
+    return "2";
+  }
+  return null;
+}
+
+function toVisitTimestamp(value: string) {
+  const parsed = parseDateInput(value);
+  if (!parsed) {
+    return null;
+  }
+  const localNoon = new Date(
+    parsed.getFullYear(),
+    parsed.getMonth(),
+    parsed.getDate(),
+    12,
+    0,
+    0,
+    0
+  );
+  return localNoon.toISOString();
+}
+
+function parseResidentId(value: string, referenceDate: Date = new Date()): AgeInfo | null {
   const digits = normalizeResidentId(value);
   if (digits.length !== 13) {
     return null;
@@ -85,11 +151,7 @@ function parseResidentId(value: string): AgeInfo | null {
     return null;
   }
 
-  const now = new Date();
-  let ageMonths = (now.getFullYear() - year) * 12 + (now.getMonth() - (mm - 1));
-  if (now.getDate() < dd) {
-    ageMonths -= 1;
-  }
+  const ageMonths = getAgeMonths(birth, referenceDate);
 
   if (ageMonths < 0) {
     return null;
@@ -168,6 +230,8 @@ export default function Home() {
     residentId: "",
     chartNo: "",
     visitDate: getTodayInputValue(),
+    growthInjection: false,
+    suppressionInjection: false,
     height: "",
     weight: ""
   });
@@ -177,8 +241,47 @@ export default function Home() {
   const [currentVisit, setCurrentVisit] = useState<Visit | null>(null);
   const [previousVisit, setPreviousVisit] = useState<Visit | null>(null);
   const [visits, setVisits] = useState<Visit[]>([]);
+  const [heightTable, setHeightTable] = useState<GrowthTable | null>(null);
+  const [weightTable, setWeightTable] = useState<GrowthTable | null>(null);
 
-  const ageInfo = useMemo(() => parseResidentId(form.residentId), [form.residentId]);
+  useEffect(() => {
+    let active = true;
+    const loadTable = async (
+      metric: "height" | "weight",
+      setter: (value: GrowthTable | null) => void
+    ) => {
+      try {
+        const response = await fetch(`/api/growth-table?metric=${metric}`);
+        if (!response.ok) {
+          throw new Error("Failed to load growth table");
+        }
+        const data = (await response.json()) as GrowthTable;
+        if (active) {
+          setter(data);
+        }
+      } catch {
+        if (active) {
+          setter(null);
+        }
+      }
+    };
+
+    loadTable("height", setHeightTable);
+    loadTable("weight", setWeightTable);
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const visitDateValue = useMemo(
+    () => parseDateInput(form.visitDate) ?? new Date(),
+    [form.visitDate]
+  );
+  const ageInfo = useMemo(
+    () => parseResidentId(form.residentId, visitDateValue),
+    [form.residentId, visitDateValue]
+  );
   const ageLabel = ageInfo ? formatAge(ageInfo.ageMonths) : "";
   const ageBucket = ageInfo
     ? ageInfo.ageMonths < 36
@@ -189,11 +292,86 @@ export default function Home() {
   const chartLabels = useMemo(() => visits.map((visit) => formatShortDate(visit.date)), [visits]);
   const heightValues = useMemo(() => visits.map((visit) => visit.height), [visits]);
   const weightValues = useMemo(() => visits.map((visit) => visit.weight), [visits]);
+  const visitAges = useMemo(() => visits.map((visit) => visit.ageMonths), [visits]);
 
   const historyVisits = useMemo(() => {
     return [...visits]
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 5);
+  }, [visits]);
+
+  const sexKey = useMemo(
+    () => getSexKey(currentPatient?.residentId ?? form.residentId),
+    [currentPatient?.residentId, form.residentId]
+  );
+
+  const ageRange = useMemo(() => {
+    const ages = visits.map((visit) => visit.ageMonths).filter(Number.isFinite);
+    if (!ages.length) {
+      return null;
+    }
+    let minAge = Math.min(...ages);
+    let maxAge = Math.max(...ages);
+    const span = Math.max(1, maxAge - minAge);
+    const pad = Math.max(3, Math.round(span * 0.1));
+    minAge = Math.max(0, minAge - pad);
+    maxAge += pad;
+    return { min: minAge, max: maxAge };
+  }, [visits]);
+
+  const heightCurves = useMemo<ReferenceCurve[]>(() => {
+    if (!heightTable || !sexKey) {
+      return [];
+    }
+    const table = heightTable.bySex[sexKey];
+    if (!table) {
+      return [];
+    }
+    return heightTable.percentiles.map((key) => ({
+      key,
+      points: table.ages
+        .map((age, index) => ({
+          x: age,
+          y: table.percentiles[key]?.[index]
+        }))
+        .filter((point) => Number.isFinite(point.y))
+    }));
+  }, [heightTable, sexKey]);
+
+  const weightCurves = useMemo<ReferenceCurve[]>(() => {
+    if (!weightTable || !sexKey) {
+      return [];
+    }
+    const table = weightTable.bySex[sexKey];
+    if (!table) {
+      return [];
+    }
+    return weightTable.percentiles.map((key) => ({
+      key,
+      points: table.ages
+        .map((age, index) => ({
+          x: age,
+          y: table.percentiles[key]?.[index]
+        }))
+        .filter((point) => Number.isFinite(point.y))
+    }));
+  }, [weightTable, sexKey]);
+
+  const injectionEvents = useMemo<ChartEvent[]>(() => {
+    return visits.flatMap((visit) => {
+      const events: ChartEvent[] = [];
+      if (visit.growthInjection) {
+        events.push({ x: visit.ageMonths, label: "성장주사", type: "growth" });
+      }
+      if (visit.suppressionInjection) {
+        events.push({ x: visit.ageMonths, label: "억제주사", type: "suppression" });
+      }
+      if (events.length === 2) {
+        events[0].offset = -8;
+        events[1].offset = 8;
+      }
+      return events;
+    });
   }, [visits]);
 
   const handleResidentChange = (value: string) => {
@@ -204,7 +382,7 @@ export default function Home() {
       return;
     }
 
-    const parsed = parseResidentId(value);
+    const parsed = parseResidentId(value, visitDateValue);
     if (!parsed) {
       setStatus({ message: "주민등록번호 형식을 확인해주세요.", type: "error" });
       return;
@@ -221,6 +399,8 @@ export default function Home() {
     const residentRaw = form.residentId.trim();
     const chartNo = form.chartNo.trim();
     const visitDate = form.visitDate;
+    const growthInjection = form.growthInjection;
+    const suppressionInjection = form.suppressionInjection;
     const height = Number.parseFloat(form.height);
     const weight = Number.parseFloat(form.weight);
 
@@ -229,7 +409,13 @@ export default function Home() {
       return;
     }
 
-    const parsed = parseResidentId(residentRaw);
+    const visitParsed = parseDateInput(visitDate);
+    if (!visitParsed) {
+      setStatus({ message: "검사일을 확인해주세요.", type: "error" });
+      return;
+    }
+
+    const parsed = parseResidentId(residentRaw, visitParsed);
     if (!parsed) {
       setStatus({ message: "주민등록번호를 정확히 입력해주세요.", type: "error" });
       return;
@@ -314,7 +500,9 @@ export default function Home() {
 
       const { data: previousRows, error: previousError } = await supabase
         .from("visits")
-        .select("id, height_cm, weight_kg, bmi, age_months, created_at")
+        .select(
+          "id, height_cm, weight_kg, bmi, age_months, created_at, growth_injection, suppression_injection"
+        )
         .eq("patient_id", patientRow.id)
         .order("created_at", { ascending: false })
         .limit(1);
@@ -330,11 +518,17 @@ export default function Home() {
             height: toNumber(previousRows[0].height_cm),
             weight: toNumber(previousRows[0].weight_kg),
             bmi: toNumber(previousRows[0].bmi),
-            ageMonths: previousRows[0].age_months
+            ageMonths: previousRows[0].age_months,
+            growthInjection: Boolean(previousRows[0].growth_injection),
+            suppressionInjection: Boolean(previousRows[0].suppression_injection)
           }
         : null;
 
       const bmi = weight / Math.pow(height / 100, 2);
+      const visitTimestamp = toVisitTimestamp(visitDate);
+      if (!visitTimestamp) {
+        throw new Error("Invalid visit date");
+      }
 
       const { data: newVisit, error: visitError } = await supabase
         .from("visits")
@@ -344,9 +538,13 @@ export default function Home() {
           weight_kg: weight,
           bmi,
           age_months: parsed.ageMonths,
-          created_at: visitDate
+          growth_injection: growthInjection,
+          suppression_injection: suppressionInjection,
+          created_at: visitTimestamp
         })
-        .select("id, height_cm, weight_kg, bmi, age_months, created_at")
+        .select(
+          "id, height_cm, weight_kg, bmi, age_months, created_at, growth_injection, suppression_injection"
+        )
         .single();
 
       if (visitError || !newVisit) {
@@ -355,7 +553,9 @@ export default function Home() {
 
       const { data: visitRows, error: visitRowsError } = await supabase
         .from("visits")
-        .select("id, height_cm, weight_kg, bmi, age_months, created_at")
+        .select(
+          "id, height_cm, weight_kg, bmi, age_months, created_at, growth_injection, suppression_injection"
+        )
         .eq("patient_id", patientRow.id)
         .order("created_at", { ascending: true });
 
@@ -369,7 +569,9 @@ export default function Home() {
         height: toNumber(row.height_cm),
         weight: toNumber(row.weight_kg),
         bmi: toNumber(row.bmi),
-        ageMonths: row.age_months
+        ageMonths: row.age_months,
+        growthInjection: Boolean(row.growth_injection),
+        suppressionInjection: Boolean(row.suppression_injection)
       }));
 
       const mappedPatient: Patient = {
@@ -385,7 +587,9 @@ export default function Home() {
         height: toNumber(newVisit.height_cm),
         weight: toNumber(newVisit.weight_kg),
         bmi: toNumber(newVisit.bmi),
-        ageMonths: newVisit.age_months
+        ageMonths: newVisit.age_months,
+        growthInjection: Boolean(newVisit.growth_injection),
+        suppressionInjection: Boolean(newVisit.suppression_injection)
       };
 
       setCurrentPatient(mappedPatient);
@@ -414,6 +618,8 @@ export default function Home() {
       residentId: "",
       chartNo: "",
       visitDate: getTodayInputValue(),
+      growthInjection: false,
+      suppressionInjection: false,
       height: "",
       weight: ""
     });
@@ -521,6 +727,33 @@ export default function Home() {
                   placeholder="15.2"
                 />
               </label>
+              <div className="sm:col-span-2">
+                <span className="text-sm text-muted">주사 기록</span>
+                <div className="mt-2 flex flex-wrap gap-4 text-sm text-ink">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={form.growthInjection}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, growthInjection: event.target.checked }))
+                      }
+                      className="h-4 w-4 accent-accent2"
+                    />
+                    성장주사
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={form.suppressionInjection}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, suppressionInjection: event.target.checked }))
+                      }
+                      className="h-4 w-4 accent-accent"
+                    />
+                    억제주사
+                  </label>
+                </div>
+              </div>
             </div>
 
             <div className={`rounded-2xl px-4 py-3 text-sm ${statusStyles[status.type]}`}>
@@ -646,11 +879,32 @@ export default function Home() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="rounded-2xl border border-outline/60 bg-white/70 p-4">
                 <div className="text-sm text-muted">키 (cm)</div>
-                <MetricChart metric="height" values={heightValues} labels={chartLabels} />
+                <MetricChart
+                  metric="height"
+                  values={heightValues}
+                  labels={chartLabels}
+                  xValues={visitAges}
+                  xRange={ageRange ?? undefined}
+                  referenceCurves={heightCurves}
+                  highlightPoint={
+                    currentVisit ? { x: currentVisit.ageMonths, y: currentVisit.height } : undefined
+                  }
+                  events={injectionEvents}
+                  xLabelFormatter={(value) => formatAge(Math.round(value))}
+                />
               </div>
               <div className="rounded-2xl border border-outline/60 bg-white/70 p-4">
                 <div className="text-sm text-muted">몸무게 (kg)</div>
-                <MetricChart metric="weight" values={weightValues} labels={chartLabels} />
+                <MetricChart
+                  metric="weight"
+                  values={weightValues}
+                  labels={chartLabels}
+                  xValues={visitAges}
+                  xRange={ageRange ?? undefined}
+                  referenceCurves={weightCurves}
+                  events={injectionEvents}
+                  xLabelFormatter={(value) => formatAge(Math.round(value))}
+                />
               </div>
             </div>
           </div>
@@ -663,11 +917,32 @@ export default function Home() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="rounded-2xl border border-outline/60 bg-white/70 p-4">
                 <div className="text-sm text-muted">키 (cm)</div>
-                <MetricChart metric="height" values={heightValues} labels={chartLabels} />
+                <MetricChart
+                  metric="height"
+                  values={heightValues}
+                  labels={chartLabels}
+                  xValues={visitAges}
+                  xRange={ageRange ?? undefined}
+                  referenceCurves={heightCurves}
+                  highlightPoint={
+                    currentVisit ? { x: currentVisit.ageMonths, y: currentVisit.height } : undefined
+                  }
+                  events={injectionEvents}
+                  xLabelFormatter={(value) => formatAge(Math.round(value))}
+                />
               </div>
               <div className="rounded-2xl border border-outline/60 bg-white/70 p-4">
                 <div className="text-sm text-muted">몸무게 (kg)</div>
-                <MetricChart metric="weight" values={weightValues} labels={chartLabels} />
+                <MetricChart
+                  metric="weight"
+                  values={weightValues}
+                  labels={chartLabels}
+                  xValues={visitAges}
+                  xRange={ageRange ?? undefined}
+                  referenceCurves={weightCurves}
+                  events={injectionEvents}
+                  xLabelFormatter={(value) => formatAge(Math.round(value))}
+                />
               </div>
             </div>
           </div>
