@@ -29,6 +29,17 @@ type Visit = {
   suppressionInjection: boolean;
 };
 
+type VisitRow = {
+  id: string;
+  height_cm: number | string | null;
+  weight_kg: number | string | null;
+  bmi: number | string | null;
+  age_months: number;
+  created_at: string;
+  growth_injection: boolean | null;
+  suppression_injection: boolean | null;
+};
+
 type AgeInfo = {
   birth: Date;
   ageMonths: number;
@@ -43,6 +54,15 @@ type GrowthTable = {
   metric: "height" | "weight";
   percentiles: string[];
   bySex: Record<string, GrowthCurve>;
+};
+
+const visitSelectFields =
+  "id, height_cm, weight_kg, bmi, age_months, created_at, growth_injection, suppression_injection";
+
+type ExpandedChart = {
+  metric: "height" | "weight";
+  title: string;
+  subtitle: string;
 };
 
 const centuryMap: Record<string, number> = {
@@ -224,6 +244,15 @@ function getTodayInputValue() {
   return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
 }
 
+function toDateInputValue(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+  const offsetMs = parsed.getTimezoneOffset() * 60000;
+  return new Date(parsed.getTime() - offsetMs).toISOString().slice(0, 10);
+}
+
 export default function Home() {
   const [form, setForm] = useState({
     name: "",
@@ -243,6 +272,10 @@ export default function Home() {
   const [visits, setVisits] = useState<Visit[]>([]);
   const [heightTable, setHeightTable] = useState<GrowthTable | null>(null);
   const [weightTable, setWeightTable] = useState<GrowthTable | null>(null);
+  const [editingVisitId, setEditingVisitId] = useState<string | null>(null);
+  const [deletingVisitId, setDeletingVisitId] = useState<string | null>(null);
+  const [expandedChart, setExpandedChart] = useState<ExpandedChart | null>(null);
+  const [chartPulse, setChartPulse] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -274,6 +307,28 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!currentVisit) {
+      return;
+    }
+    setChartPulse(true);
+    const timer = window.setTimeout(() => setChartPulse(false), 800);
+    return () => window.clearTimeout(timer);
+  }, [currentVisit?.id]);
+
+  useEffect(() => {
+    if (!expandedChart) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setExpandedChart(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [expandedChart]);
+
   const visitDateValue = useMemo(
     () => parseDateInput(form.visitDate) ?? new Date(),
     [form.visitDate]
@@ -288,6 +343,14 @@ export default function Home() {
       ? "36개월 미만"
       : "36개월 이상"
     : "";
+  const chartAgeFormatter = (value: number) => formatAge(Math.round(value));
+  const chartPulseClass = chartPulse ? "animate-[chart-reveal_0.8s_ease]" : "";
+  const isMutating = isLoading || Boolean(deletingVisitId);
+  const submitLabel = isLoading
+    ? "저장 중..."
+    : editingVisitId
+    ? "수정 저장"
+    : "저장 / 업데이트";
 
   const chartLabels = useMemo(() => visits.map((visit) => formatShortDate(visit.date)), [visits]);
   const heightValues = useMemo(() => visits.map((visit) => visit.height), [visits]);
@@ -374,6 +437,95 @@ export default function Home() {
     });
   }, [visits]);
 
+  const openChart = (metric: "height" | "weight", title: string, subtitle: string) => {
+    setExpandedChart({ metric, title, subtitle });
+  };
+
+  const closeChart = () => setExpandedChart(null);
+
+  const mapVisitRows = (rows: VisitRow[]) =>
+    rows.map((row) => ({
+      id: row.id,
+      date: row.created_at,
+      height: toNumber(row.height_cm),
+      weight: toNumber(row.weight_kg),
+      bmi: toNumber(row.bmi),
+      ageMonths: row.age_months,
+      growthInjection: Boolean(row.growth_injection),
+      suppressionInjection: Boolean(row.suppression_injection)
+    }));
+
+  const setVisitStateFromRows = (rows: VisitRow[], focusId?: string) => {
+    const mappedVisits = mapVisitRows(rows);
+    if (!mappedVisits.length) {
+      setVisits([]);
+      setCurrentVisit(null);
+      setPreviousVisit(null);
+      return;
+    }
+    const sorted = [...mappedVisits].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+    setVisits(sorted);
+    let index = focusId ? sorted.findIndex((visit) => visit.id === focusId) : sorted.length - 1;
+    if (index < 0) {
+      index = sorted.length - 1;
+    }
+    setCurrentVisit(sorted[index]);
+    setPreviousVisit(index > 0 ? sorted[index - 1] : null);
+  };
+
+  const handleEditVisit = (visit: Visit) => {
+    if (!currentPatient || isMutating) {
+      return;
+    }
+    setEditingVisitId(visit.id);
+    setForm({
+      name: currentPatient.name,
+      residentId: currentPatient.residentId,
+      chartNo: currentPatient.chartNo ?? "",
+      visitDate: toDateInputValue(visit.date),
+      growthInjection: visit.growthInjection,
+      suppressionInjection: visit.suppressionInjection,
+      height: visit.height.toFixed(1),
+      weight: visit.weight.toFixed(1)
+    });
+    setStatus({ message: "방문 기록을 수정합니다.", type: "info" });
+  };
+
+  const handleDeleteVisit = async (visitId: string) => {
+    if (!currentPatient || isMutating) {
+      return;
+    }
+    if (!window.confirm("이 방문 기록을 삭제할까요?")) {
+      return;
+    }
+    setDeletingVisitId(visitId);
+    try {
+      const { error: deleteError } = await supabase.from("visits").delete().eq("id", visitId);
+      if (deleteError) {
+        throw deleteError;
+      }
+      const { data: visitRows, error: visitRowsError } = await supabase
+        .from("visits")
+        .select(visitSelectFields)
+        .eq("patient_id", currentPatient.id)
+        .order("created_at", { ascending: true });
+      if (visitRowsError) {
+        throw visitRowsError;
+      }
+      setVisitStateFromRows(visitRows ?? []);
+      if (editingVisitId === visitId) {
+        setEditingVisitId(null);
+      }
+      setStatus({ message: "방문 기록이 삭제되었습니다.", type: "success" });
+    } catch (error) {
+      setStatus({ message: "삭제 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", type: "error" });
+    } finally {
+      setDeletingVisitId(null);
+    }
+  };
+
   const handleResidentChange = (value: string) => {
     setForm((prev) => ({ ...prev, residentId: value }));
 
@@ -394,6 +546,9 @@ export default function Home() {
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (deletingVisitId) {
+      return;
+    }
 
     const name = form.name.trim();
     const residentRaw = form.residentId.trim();
@@ -431,55 +586,35 @@ export default function Home() {
     try {
       const residentId = normalizeResidentId(residentRaw);
 
-      const { data: residentMatch, error: residentError } = await supabase
-        .from("patients")
-        .select("id, name, resident_id, chart_no")
-        .eq("resident_id", residentId)
-        .maybeSingle();
+      let patientRow: {
+        id: string;
+        name: string;
+        resident_id: string;
+        chart_no: string | null;
+      } | null = null;
+      let matchType: "resident" | "chart" | null = null;
 
-      if (residentError) {
-        throw residentError;
-      }
-
-      let patientRow = residentMatch;
-      let matchType: "resident" | "chart" | null = residentMatch ? "resident" : null;
-
-      if (!patientRow && chartNo) {
-        const { data: chartMatch, error: chartError } = await supabase
-          .from("patients")
-          .select("id, name, resident_id, chart_no")
-          .eq("chart_no", chartNo)
-          .maybeSingle();
-
-        if (chartError) {
-          throw chartError;
+      if (editingVisitId) {
+        if (!currentPatient) {
+          throw new Error("No active patient");
         }
+        patientRow = {
+          id: currentPatient.id,
+          name: currentPatient.name,
+          resident_id: currentPatient.residentId,
+          chart_no: currentPatient.chartNo
+        };
 
-        if (chartMatch) {
-          patientRow = chartMatch;
-          matchType = "chart";
-        }
-      }
-
-      if (!patientRow) {
-        const { data: createdPatient, error: insertError } = await supabase
-          .from("patients")
-          .insert({ name, resident_id: residentId, chart_no: chartNo || null })
-          .select("id, name, resident_id, chart_no")
-          .single();
-
-        if (insertError || !createdPatient) {
-          throw insertError;
-        }
-
-        patientRow = createdPatient;
-      } else {
-        const updates: { name?: string; chart_no?: string | null } = {};
+        const updates: { name?: string; resident_id?: string; chart_no?: string | null } = {};
         if (name && patientRow.name !== name) {
           updates.name = name;
         }
-        if (chartNo && patientRow.chart_no !== chartNo) {
-          updates.chart_no = chartNo;
+        if (residentId && normalizeResidentId(patientRow.resident_id) !== residentId) {
+          updates.resident_id = residentId;
+        }
+        const chartValue = chartNo || null;
+        if (patientRow.chart_no !== chartValue) {
+          updates.chart_no = chartValue;
         }
 
         if (Object.keys(updates).length) {
@@ -496,33 +631,78 @@ export default function Home() {
 
           patientRow = updatedPatient;
         }
-      }
+      } else {
+        const { data: residentMatch, error: residentError } = await supabase
+          .from("patients")
+          .select("id, name, resident_id, chart_no")
+          .eq("resident_id", residentId)
+          .maybeSingle();
 
-      const { data: previousRows, error: previousError } = await supabase
-        .from("visits")
-        .select(
-          "id, height_cm, weight_kg, bmi, age_months, created_at, growth_injection, suppression_injection"
-        )
-        .eq("patient_id", patientRow.id)
-        .order("created_at", { ascending: false })
-        .limit(1);
+        if (residentError) {
+          throw residentError;
+        }
 
-      if (previousError) {
-        throw previousError;
-      }
+        patientRow = residentMatch;
+        matchType = residentMatch ? "resident" : null;
 
-      const previous = previousRows && previousRows[0]
-        ? {
-            id: previousRows[0].id,
-            date: previousRows[0].created_at,
-            height: toNumber(previousRows[0].height_cm),
-            weight: toNumber(previousRows[0].weight_kg),
-            bmi: toNumber(previousRows[0].bmi),
-            ageMonths: previousRows[0].age_months,
-            growthInjection: Boolean(previousRows[0].growth_injection),
-            suppressionInjection: Boolean(previousRows[0].suppression_injection)
+        if (!patientRow && chartNo) {
+          const { data: chartMatch, error: chartError } = await supabase
+            .from("patients")
+            .select("id, name, resident_id, chart_no")
+            .eq("chart_no", chartNo)
+            .maybeSingle();
+
+          if (chartError) {
+            throw chartError;
           }
-        : null;
+
+          if (chartMatch) {
+            patientRow = chartMatch;
+            matchType = "chart";
+          }
+        }
+
+        if (!patientRow) {
+          const { data: createdPatient, error: insertError } = await supabase
+            .from("patients")
+            .insert({ name, resident_id: residentId, chart_no: chartNo || null })
+            .select("id, name, resident_id, chart_no")
+            .single();
+
+          if (insertError || !createdPatient) {
+            throw insertError;
+          }
+
+          patientRow = createdPatient;
+        } else {
+          const updates: { name?: string; chart_no?: string | null } = {};
+          if (name && patientRow.name !== name) {
+            updates.name = name;
+          }
+          if (chartNo && patientRow.chart_no !== chartNo) {
+            updates.chart_no = chartNo;
+          }
+
+          if (Object.keys(updates).length) {
+            const { data: updatedPatient, error: updateError } = await supabase
+              .from("patients")
+              .update(updates)
+              .eq("id", patientRow.id)
+              .select("id, name, resident_id, chart_no")
+              .single();
+
+            if (updateError || !updatedPatient) {
+              throw updateError;
+            }
+
+            patientRow = updatedPatient;
+          }
+        }
+      }
+
+      if (!patientRow) {
+        throw new Error("Patient not found");
+      }
 
       const bmi = weight / Math.pow(height / 100, 2);
       const visitTimestamp = toVisitTimestamp(visitDate);
@@ -530,49 +710,58 @@ export default function Home() {
         throw new Error("Invalid visit date");
       }
 
-      const { data: newVisit, error: visitError } = await supabase
-        .from("visits")
-        .insert({
-          patient_id: patientRow.id,
-          height_cm: height,
-          weight_kg: weight,
-          bmi,
-          age_months: parsed.ageMonths,
-          growth_injection: growthInjection,
-          suppression_injection: suppressionInjection,
-          created_at: visitTimestamp
-        })
-        .select(
-          "id, height_cm, weight_kg, bmi, age_months, created_at, growth_injection, suppression_injection"
-        )
-        .single();
+      let savedVisitId: string | null = null;
+      if (editingVisitId) {
+        const { data: updatedVisit, error: updateVisitError } = await supabase
+          .from("visits")
+          .update({
+            height_cm: height,
+            weight_kg: weight,
+            bmi,
+            age_months: parsed.ageMonths,
+            growth_injection: growthInjection,
+            suppression_injection: suppressionInjection,
+            created_at: visitTimestamp
+          })
+          .eq("id", editingVisitId)
+          .select(visitSelectFields)
+          .single();
 
-      if (visitError || !newVisit) {
-        throw visitError;
+        if (updateVisitError || !updatedVisit) {
+          throw updateVisitError;
+        }
+        savedVisitId = updatedVisit.id;
+      } else {
+        const { data: newVisit, error: visitError } = await supabase
+          .from("visits")
+          .insert({
+            patient_id: patientRow.id,
+            height_cm: height,
+            weight_kg: weight,
+            bmi,
+            age_months: parsed.ageMonths,
+            growth_injection: growthInjection,
+            suppression_injection: suppressionInjection,
+            created_at: visitTimestamp
+          })
+          .select(visitSelectFields)
+          .single();
+
+        if (visitError || !newVisit) {
+          throw visitError;
+        }
+        savedVisitId = newVisit.id;
       }
 
       const { data: visitRows, error: visitRowsError } = await supabase
         .from("visits")
-        .select(
-          "id, height_cm, weight_kg, bmi, age_months, created_at, growth_injection, suppression_injection"
-        )
+        .select(visitSelectFields)
         .eq("patient_id", patientRow.id)
         .order("created_at", { ascending: true });
 
       if (visitRowsError) {
         throw visitRowsError;
       }
-
-      const mappedVisits = (visitRows ?? []).map((row) => ({
-        id: row.id,
-        date: row.created_at,
-        height: toNumber(row.height_cm),
-        weight: toNumber(row.weight_kg),
-        bmi: toNumber(row.bmi),
-        ageMonths: row.age_months,
-        growthInjection: Boolean(row.growth_injection),
-        suppressionInjection: Boolean(row.suppression_injection)
-      }));
 
       const mappedPatient: Patient = {
         id: patientRow.id,
@@ -581,21 +770,8 @@ export default function Home() {
         chartNo: patientRow.chart_no
       };
 
-      const mappedCurrent: Visit = {
-        id: newVisit.id,
-        date: newVisit.created_at,
-        height: toNumber(newVisit.height_cm),
-        weight: toNumber(newVisit.weight_kg),
-        bmi: toNumber(newVisit.bmi),
-        ageMonths: newVisit.age_months,
-        growthInjection: Boolean(newVisit.growth_injection),
-        suppressionInjection: Boolean(newVisit.suppression_injection)
-      };
-
       setCurrentPatient(mappedPatient);
-      setCurrentVisit(mappedCurrent);
-      setPreviousVisit(previous);
-      setVisits(mappedVisits);
+      setVisitStateFromRows(visitRows ?? [], savedVisitId ?? undefined);
 
       if (matchType === "chart" && patientRow.resident_id !== residentId) {
         setStatus({
@@ -603,7 +779,13 @@ export default function Home() {
           type: "warn"
         });
       } else {
-        setStatus({ message: "성장 기록이 저장되었습니다.", type: "success" });
+        setStatus({
+          message: editingVisitId ? "방문 기록이 수정되었습니다." : "성장 기록이 저장되었습니다.",
+          type: "success"
+        });
+      }
+      if (editingVisitId) {
+        setEditingVisitId(null);
       }
     } catch (error) {
       setStatus({ message: "저장 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", type: "error" });
@@ -624,6 +806,7 @@ export default function Home() {
       weight: ""
     });
     setStatus(defaultStatus);
+    setEditingVisitId(null);
   };
 
   return (
@@ -769,10 +952,10 @@ export default function Home() {
             <div className="flex flex-wrap gap-3">
               <button
                 type="submit"
-                disabled={isLoading}
-                className="rounded-full bg-accent px-6 py-2 text-sm font-semibold text-white shadow-glow transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
+                disabled={isMutating}
+                className="rounded-full bg-accent px-6 py-2 text-sm font-semibold text-ink shadow-glow transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
               >
-                {isLoading ? "저장 중..." : "저장 / 업데이트"}
+                {submitLabel}
               </button>
               <button
                 type="button"
@@ -877,34 +1060,60 @@ export default function Home() {
               <p className="text-sm text-muted">짧은 간격 변화에 집중한 보기</p>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="rounded-2xl border border-outline/60 bg-white/70 p-4">
+              <div
+                className={`rounded-2xl border border-outline/60 bg-white/70 p-4 ${chartPulseClass}`}
+              >
                 <div className="text-sm text-muted">키 (cm)</div>
-                <MetricChart
-                  metric="height"
-                  values={heightValues}
-                  labels={chartLabels}
-                  xValues={visitAges}
-                  xRange={ageRange ?? undefined}
-                  referenceCurves={heightCurves}
-                  highlightPoint={
-                    currentVisit ? { x: currentVisit.ageMonths, y: currentVisit.height } : undefined
+                <button
+                  type="button"
+                  onClick={() =>
+                    openChart("height", "36개월 미만 차트", "짧은 간격 변화에 집중한 보기")
                   }
-                  events={injectionEvents}
-                  xLabelFormatter={(value) => formatAge(Math.round(value))}
-                />
+                  className="mt-2 w-full cursor-zoom-in rounded-xl p-1 text-left transition hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent2/60"
+                  aria-label="키 차트 크게 보기"
+                >
+                  <MetricChart
+                    key={`height-${currentVisit?.id ?? "empty"}`}
+                    metric="height"
+                    values={heightValues}
+                    labels={chartLabels}
+                    xValues={visitAges}
+                    xRange={ageRange ?? undefined}
+                    referenceCurves={heightCurves}
+                    highlightPoint={
+                      currentVisit ? { x: currentVisit.ageMonths, y: currentVisit.height } : undefined
+                    }
+                    events={injectionEvents}
+                    xLabelFormatter={chartAgeFormatter}
+                    className="h-[220px] w-full sm:h-[240px]"
+                  />
+                </button>
               </div>
-              <div className="rounded-2xl border border-outline/60 bg-white/70 p-4">
+              <div
+                className={`rounded-2xl border border-outline/60 bg-white/70 p-4 ${chartPulseClass}`}
+              >
                 <div className="text-sm text-muted">몸무게 (kg)</div>
-                <MetricChart
-                  metric="weight"
-                  values={weightValues}
-                  labels={chartLabels}
-                  xValues={visitAges}
-                  xRange={ageRange ?? undefined}
-                  referenceCurves={weightCurves}
-                  events={injectionEvents}
-                  xLabelFormatter={(value) => formatAge(Math.round(value))}
-                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    openChart("weight", "36개월 미만 차트", "짧은 간격 변화에 집중한 보기")
+                  }
+                  className="mt-2 w-full cursor-zoom-in rounded-xl p-1 text-left transition hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent2/60"
+                  aria-label="몸무게 차트 크게 보기"
+                >
+                  <MetricChart
+                    key={`weight-${currentVisit?.id ?? "empty"}`}
+                    metric="weight"
+                    values={weightValues}
+                    labels={chartLabels}
+                    xValues={visitAges}
+                    xRange={ageRange ?? undefined}
+                    referenceCurves={weightCurves}
+                    events={injectionEvents}
+                    xLabelFormatter={chartAgeFormatter}
+                    className="h-[220px] w-full sm:h-[240px]"
+                  />
+                </button>
               </div>
             </div>
           </div>
@@ -915,34 +1124,60 @@ export default function Home() {
               <p className="text-sm text-muted">장기 추세를 한눈에 볼 수 있는 보기</p>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="rounded-2xl border border-outline/60 bg-white/70 p-4">
+              <div
+                className={`rounded-2xl border border-outline/60 bg-white/70 p-4 ${chartPulseClass}`}
+              >
                 <div className="text-sm text-muted">키 (cm)</div>
-                <MetricChart
-                  metric="height"
-                  values={heightValues}
-                  labels={chartLabels}
-                  xValues={visitAges}
-                  xRange={ageRange ?? undefined}
-                  referenceCurves={heightCurves}
-                  highlightPoint={
-                    currentVisit ? { x: currentVisit.ageMonths, y: currentVisit.height } : undefined
+                <button
+                  type="button"
+                  onClick={() =>
+                    openChart("height", "36개월 이상 차트", "장기 추세를 한눈에 볼 수 있는 보기")
                   }
-                  events={injectionEvents}
-                  xLabelFormatter={(value) => formatAge(Math.round(value))}
-                />
+                  className="mt-2 w-full cursor-zoom-in rounded-xl p-1 text-left transition hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent2/60"
+                  aria-label="키 차트 크게 보기"
+                >
+                  <MetricChart
+                    key={`height-${currentVisit?.id ?? "empty"}`}
+                    metric="height"
+                    values={heightValues}
+                    labels={chartLabels}
+                    xValues={visitAges}
+                    xRange={ageRange ?? undefined}
+                    referenceCurves={heightCurves}
+                    highlightPoint={
+                      currentVisit ? { x: currentVisit.ageMonths, y: currentVisit.height } : undefined
+                    }
+                    events={injectionEvents}
+                    xLabelFormatter={chartAgeFormatter}
+                    className="h-[220px] w-full sm:h-[240px]"
+                  />
+                </button>
               </div>
-              <div className="rounded-2xl border border-outline/60 bg-white/70 p-4">
+              <div
+                className={`rounded-2xl border border-outline/60 bg-white/70 p-4 ${chartPulseClass}`}
+              >
                 <div className="text-sm text-muted">몸무게 (kg)</div>
-                <MetricChart
-                  metric="weight"
-                  values={weightValues}
-                  labels={chartLabels}
-                  xValues={visitAges}
-                  xRange={ageRange ?? undefined}
-                  referenceCurves={weightCurves}
-                  events={injectionEvents}
-                  xLabelFormatter={(value) => formatAge(Math.round(value))}
-                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    openChart("weight", "36개월 이상 차트", "장기 추세를 한눈에 볼 수 있는 보기")
+                  }
+                  className="mt-2 w-full cursor-zoom-in rounded-xl p-1 text-left transition hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent2/60"
+                  aria-label="몸무게 차트 크게 보기"
+                >
+                  <MetricChart
+                    key={`weight-${currentVisit?.id ?? "empty"}`}
+                    metric="weight"
+                    values={weightValues}
+                    labels={chartLabels}
+                    xValues={visitAges}
+                    xRange={ageRange ?? undefined}
+                    referenceCurves={weightCurves}
+                    events={injectionEvents}
+                    xLabelFormatter={chartAgeFormatter}
+                    className="h-[220px] w-full sm:h-[240px]"
+                  />
+                </button>
               </div>
             </div>
           </div>
@@ -955,12 +1190,64 @@ export default function Home() {
               {historyVisits.map((visit) => (
                 <li
                   key={visit.id}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-outline/60 bg-white/70 px-4 py-3"
+                  className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-outline/60 px-4 py-3 ${
+                    editingVisitId === visit.id ? "bg-white/90" : "bg-white/70"
+                  }`}
                 >
-                  <strong className="text-sm text-ink">{formatDate(visit.date)}</strong>
-                  <span className="text-xs text-muted">
-                    키 {visit.height.toFixed(1)}cm · 몸무게 {visit.weight.toFixed(1)}kg · BMI {visit.bmi.toFixed(1)}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <strong className="text-sm text-ink">{formatDate(visit.date)}</strong>
+                    <span className="text-xs text-muted">
+                      키 {visit.height.toFixed(1)}cm · 몸무게 {visit.weight.toFixed(1)}kg · BMI{" "}
+                      {visit.bmi.toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleEditVisit(visit)}
+                      disabled={isMutating}
+                      title="방문 기록 수정"
+                      aria-label="방문 기록 수정"
+                      className="rounded-full border border-outline/60 bg-white/80 p-2 text-ink transition hover:-translate-y-0.5 hover:text-accent2 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.7"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="h-4 w-4"
+                      >
+                        <path d="M12 20h9" />
+                        <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteVisit(visit.id)}
+                      disabled={isMutating}
+                      title="방문 기록 삭제"
+                      aria-label="방문 기록 삭제"
+                      className="rounded-full border border-outline/60 bg-white/80 p-2 text-ink transition hover:-translate-y-0.5 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.7"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="h-4 w-4"
+                      >
+                        <path d="M3 6h18" />
+                        <path d="M8 6V4h8v2" />
+                        <path d="M19 6l-1 14H6L5 6" />
+                        <path d="M10 11v6" />
+                        <path d="M14 11v6" />
+                      </svg>
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -973,6 +1260,63 @@ export default function Home() {
       <footer className="mt-10 text-xs text-muted">
         {ageInfo && currentVisit ? `현재 환자 기준: ${ageLabel} · ${ageBucket}` : ""}
       </footer>
+
+      {expandedChart && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-[2px] animate-[modal-fade_0.2s_ease]"
+          onClick={closeChart}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="확대 차트"
+            className="w-full max-w-5xl rounded-3xl border border-outline bg-card p-6 shadow-soft animate-[modal-pop_0.25s_ease]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <span className="text-xs uppercase tracking-[0.3em] text-accent2">
+                  {expandedChart.title}
+                </span>
+                <h3 className="mt-2 text-2xl font-semibold text-ink">
+                  {expandedChart.metric === "height" ? "키 차트" : "몸무게 차트"}
+                </h3>
+                <p className="mt-1 text-sm text-muted">{expandedChart.subtitle}</p>
+              </div>
+              <button
+                type="button"
+                onClick={closeChart}
+                className="rounded-full border border-outline px-4 py-2 text-sm font-medium text-ink transition hover:-translate-y-0.5"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-outline/60 bg-white/80 p-4">
+              <div className="text-sm text-muted">
+                {expandedChart.metric === "height" ? "키 (cm)" : "몸무게 (kg)"}
+              </div>
+              <MetricChart
+                key={`expanded-${expandedChart.metric}-${currentVisit?.id ?? "empty"}`}
+                metric={expandedChart.metric}
+                values={expandedChart.metric === "height" ? heightValues : weightValues}
+                labels={chartLabels}
+                xValues={visitAges}
+                xRange={ageRange ?? undefined}
+                referenceCurves={expandedChart.metric === "height" ? heightCurves : weightCurves}
+                highlightPoint={
+                  expandedChart.metric === "height" && currentVisit
+                    ? { x: currentVisit.ageMonths, y: currentVisit.height }
+                    : undefined
+                }
+                events={injectionEvents}
+                xLabelFormatter={chartAgeFormatter}
+                className="h-[320px] w-full sm:h-[360px] lg:h-[420px]"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

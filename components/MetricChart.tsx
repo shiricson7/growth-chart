@@ -22,6 +22,7 @@ type MetricChartProps = {
   highlightPoint?: { x: number; y: number };
   events?: ChartEvent[];
   xLabelFormatter?: (value: number) => string;
+  className?: string;
 };
 
 const width = 600;
@@ -37,7 +38,8 @@ export default function MetricChart({
   referenceCurves,
   highlightPoint,
   events,
-  xLabelFormatter
+  xLabelFormatter,
+  className
 }: MetricChartProps) {
   const points = values
     .map((value, index) => ({
@@ -48,7 +50,9 @@ export default function MetricChart({
 
   if (!points.length) {
     return (
-      <div className="flex h-[200px] items-center justify-center text-sm text-muted">
+      <div
+        className={`flex h-[200px] w-full items-center justify-center text-sm text-muted ${className ?? ""}`}
+      >
         기록이 없습니다.
       </div>
     );
@@ -119,7 +123,13 @@ export default function MetricChart({
   const axisY = height - padding.bottom;
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="성장 추적 차트">
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label="성장 추적 차트"
+      preserveAspectRatio="xMidYMid meet"
+      className={`w-full h-auto ${className ?? ""}`}
+    >
       {grid.map((row) => (
         <g key={`grid-${row.y}`}>
           <line
